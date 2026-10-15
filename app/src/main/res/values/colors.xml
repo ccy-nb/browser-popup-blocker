@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="white">#FFFFFFFF</color>
+
+    <color name="brand_primary">#FF2A5BFF</color>
+    <color name="brand_container">#FFDDE3FF</color>
+    <color name="brand_on_container">#FF0B1F66</color>
+
+    <color name="text_primary">#FF1A1A1A</color>
+    <color name="text_secondary">#FF6B6B6B</color>
+
+    <color name="outline">#FFE1E1E6</color>
+
+    <color name="status_on">#FF1E9E5A</color>
+    <color name="status_off">#FFD93025</color>
+
+    <color name="ic_launcher_background">#FF2A5BFF</color>
+</resources>
