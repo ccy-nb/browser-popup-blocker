@@ -303,15 +303,38 @@ class PopupDetector(
         return (nearLeft || nearRight) && (nearTop || nearBottom)
     }
 
+    /**
+     * 解析出真正该点击的节点。
+     *
+     * 关键约束：**只在“小”目标上点击**。
+     * 关闭按钮一定是小的；而广告横幅、列表项、整块卡片本身往往也是可点击的
+     * （点下去会打开落地页）。上一版会一路向上找可点击祖先，结果可能直接在
+     * 广告容器上点了一下，等于替用户打开了广告页面。
+     */
     private fun resolveClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
-        if (node.isClickable && node.isEnabled) return node
+        if (node.isClickable && node.isEnabled) {
+            return if (isSmallTarget(node)) node else null
+        }
+
         var parent = node.parent
         var hops = 0
         while (parent != null && hops < 3) {
-            if (parent.isClickable && parent.isEnabled) return parent
+            if (parent.isClickable && parent.isEnabled) {
+                // 第一个可点击祖先如果不是小目标，再往上只会更大，直接放弃
+                return if (isSmallTarget(parent)) parent else null
+            }
             parent = parent.parent
             hops++
         }
         return null
+    }
+
+    /** 小目标：面积不超过屏幕的 20%。按钮够小，容器不够。 */
+    private fun isSmallTarget(node: AccessibilityNodeInfo): Boolean {
+        if (screenArea <= 0L) return false
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        val area = rect.width().toLong() * rect.height().toLong()
+        return area * 100 <= screenArea * 20
     }
 }

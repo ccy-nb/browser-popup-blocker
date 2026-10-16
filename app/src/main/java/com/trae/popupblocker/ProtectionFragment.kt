@@ -55,16 +55,7 @@ class ProtectionFragment : Fragment() {
             refreshServiceState()
         })
         bindSwitch(view.swClickClose, { prefs.clickClose }, { prefs.clickClose = it })
-        bindSwitch(view.swBackFallback, { prefs.backFallback }, {
-            prefs.backFallback = it
-            updateBackWarning()
-        })
         bindSwitch(view.swAggressive, { prefs.aggressive }, { prefs.aggressive = it })
-        updateBackWarning()
-    }
-
-    private fun updateBackWarning() {
-        binding?.tvBackWarning?.visibility = if (prefs.backFallback) View.VISIBLE else View.GONE
     }
 
     private fun bindSwitch(

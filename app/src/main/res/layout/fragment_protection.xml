@@ -112,25 +112,6 @@
                     android:text="@string/sw_click_close_desc" />
 
                 <com.google.android.material.materialswitch.MaterialSwitch
-                    android:id="@+id/swBackFallback"
-                    style="@style/Widget.App.SettingSwitch"
-                    android:text="@string/sw_back_fallback" />
-
-                <TextView
-                    style="@style/Widget.App.SettingDesc"
-                    android:text="@string/sw_back_fallback_desc" />
-
-                <TextView
-                    android:id="@+id/tvBackWarning"
-                    style="@style/Widget.App.SettingDesc"
-                    android:background="@color/brand_container"
-                    android:padding="10dp"
-                    android:text="@string/back_fallback_warning"
-                    android:textColor="@color/brand_on_container"
-                    android:visibility="gone"
-                    tools:visibility="visible" />
-
-                <com.google.android.material.materialswitch.MaterialSwitch
                     android:id="@+id/swAggressive"
                     style="@style/Widget.App.SettingSwitch"
                     android:text="@string/sw_aggressive" />

@@ -12,20 +12,24 @@ import android.view.accessibility.AccessibilityNodeInfo
 /**
  * 核心无障碍服务：监听窗口变化，从页面上找出垃圾弹窗并处理掉。
  *
- * 相比上一版的三处关键改动：
- *  1. 去抖不再重置计时器（上一版在事件风暴下扫描任务永远不执行，
- *     导致倒计时开屏广告的「跳过」点不到）；
- *  2. 窗口出现后做多轮重试，覆盖「倒计时结束才出现跳过按钮」的情况；
- *  3. 返回键兜底被限制成「窗口里确实有跳过/关闭文案、但找不到可点击目标时」才触发，
- *     并且默认关闭——它是唯一会替用户离开当前页面的动作。
+ * 动作只有一种：**点击**。绝不模拟返回键——返回会替用户离开当前页面，
+ * 对网页内的浮层尤其危险（可能触发历史回退甚至退出应用），所以这个能力被彻底移除了。
+ *
+ * 另外两条稳定性约束：
+ *  - 歧义文案（「关闭」这类）只在一个**刚出现的窗口**里才处理，窗口稳定下来之后不碰，
+ *    因为那时用户正在正常操作，屏幕上出现「关闭」多半是用户自己打开的对话；
+ *  - 点击目标必须是**小节点**，避免点到可点击的广告容器而打开落地页。
  */
 class PopupAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "PopupBlocker"
 
-        /** 同一窗口连续处理超过这个次数就认为点不掉，暂时收手 */
-        private const val MAX_ACTIONS_PER_WINDOW = 2
+        /** 同一窗口最多处理一次，避免反复动手 */
+        private const val MAX_ACTIONS_PER_WINDOW = 1
+
+        /** 窗口出现后多久之内才允许处理“歧义文案”，超时视为用户已在正常操作 */
+        private const val FRESH_WINDOW_MS = 8000L
 
         /** 窗口出现后的多轮重试间隔（毫秒），用于等倒计时结束后才出现的跳过按钮 */
         private val RETRY_INTERVALS = longArrayOf(1000L, 1200L, 1600L, 2200L, 3000L)
@@ -45,6 +49,7 @@ class PopupAccessibilityService : AccessibilityService() {
     private val knownBrowsers: Set<String> by lazy { AppUtils.browsers(this) }
 
     private var lastWindowSignature: String? = null
+    private var windowAppearedAt = 0L
     private var lastActionAt = 0L
 
     private var actionWindowSignature: String? = null
@@ -101,6 +106,7 @@ class PopupAccessibilityService : AccessibilityService() {
                 val signature = "$pkg|${event.className}|${event.windowId}"
                 if (signature == lastWindowSignature) return
                 lastWindowSignature = signature
+                windowAppearedAt = SystemClock.uptimeMillis()
                 scheduleScan()
                 armRetries()
             }
@@ -154,27 +160,26 @@ class PopupAccessibilityService : AccessibilityService() {
         )
         val result = detector.scan(root)
 
-        // 首选：直接点掉关闭按钮
         val candidate = result.closeCandidate
-        var acted = false
-        if (candidate != null && prefs.clickClose) {
-            acted = click(candidate.node)
-            if (acted) {
+        val freshWindow = SystemClock.uptimeMillis() - windowAppearedAt <= FRESH_WINDOW_MS
+
+        // 歧义文案只在一个刚出现的窗口里处理。窗口稳定下来之后不碰，
+        // 因为那时用户正在正常操作，屏幕上出现「关闭」多半是他自己打开的对话。
+        val eligible = candidate != null &&
+            prefs.clickClose &&
+            (candidate.confidence >= 10 || freshWindow)
+
+        if (eligible) {
+            if (click(candidate.node)) {
                 record(pkg, candidate.reason)
                 return
             }
         }
 
-        // 兜底：窗口里确实存在关闭文案，但一个可点击目标都没找到，才允许按返回
-        if (!acted && prefs.backFallback && candidate == null && result.hasCloseText) {
-            if (performGlobalAction(GLOBAL_ACTION_BACK)) {
-                record(pkg, "窗口内有「关闭/跳过」文案但无可点击目标，执行返回键兜底")
-                return
-            }
-        }
-
-        // 没有动作时，把“为什么没动手”记进诊断，供排查漏拦
+        // 没有动作时，把“为什么没动手”记进诊断，供排查漏拦与误拦
         val outcome = when {
+            candidate != null && !prefs.clickClose -> "自动点击已关闭，未处理：${candidate.reason}"
+            candidate != null && !eligible -> "窗口已稳定，跳过歧义文案：${candidate.reason}"
             candidate != null -> "找到关闭目标但点击未生效：${candidate.reason}"
             result.signals.isNotEmpty() -> result.signals.first()
             result.hasCloseText -> "有关闭文案但无可点击目标"

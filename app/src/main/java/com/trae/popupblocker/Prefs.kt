@@ -56,16 +56,6 @@ class Prefs(context: Context) {
         }
 
     /**
-     * 返回键兜底。这是唯一会“替用户离开当前页面”的动作，误伤代价很高，
-     * 所以默认关闭，并且触发条件被限制得很死（窗口里确实存在关闭文案但点不到）。
-     */
-    var backFallback: Boolean
-        get() = sp.getBoolean(KEY_BACK_FALLBACK, false)
-        set(value) {
-            sp.edit { putBoolean(KEY_BACK_FALLBACK, value) }
-        }
-
-    /**
      * 激进模式：把角落里没有文字的小图标也当成关闭按钮。
      * 命中率更高，但属于“猜”，所以默认关闭。
      */
@@ -74,6 +64,28 @@ class Prefs(context: Context) {
         set(value) {
             sp.edit { putBoolean(KEY_AGGRESSIVE, value) }
         }
+
+    init {
+        migrate()
+    }
+
+    /**
+     * 配置迁移。
+     *
+     * 光改默认值是没用的：SharedPreferences 的默认值只在键不存在时生效，
+     * 老版本写进去的高风险配置会一直留着。所以升级时显式把危险项落回安全状态。
+     */
+    private fun migrate() {
+        val stored = sp.getInt(KEY_SCHEMA, 0)
+        if (stored >= SCHEMA) return
+
+        sp.edit {
+            putBoolean(KEY_AGGRESSIVE, false)
+            // 返回键兜底已彻底移除，清掉历史键，避免残留值影响判断
+            remove("back_fallback")
+            putInt(KEY_SCHEMA, SCHEMA)
+        }
+    }
 
     /** 识别到窗口变化后延迟多久再扫描（毫秒），给页面留出渲染时间 */
     var clickDelayMs: Long
@@ -108,11 +120,14 @@ class Prefs(context: Context) {
     }
 
     companion object {
+        /** 配置结构版本：升级时用它触发一次安全回落 */
+        private const val SCHEMA = 2
+
+        private const val KEY_SCHEMA = "prefs_schema"
         private const val KEY_ENABLED = "enabled"
         private const val KEY_MODE = "protect_mode"
         private const val KEY_SELECTED_APPS = "selected_apps"
         private const val KEY_CLICK_CLOSE = "click_close"
-        private const val KEY_BACK_FALLBACK = "back_fallback"
         private const val KEY_AGGRESSIVE = "aggressive"
         private const val KEY_DELAY = "delay"
         private const val KEY_PAUSE_UNTIL = "pause_until"

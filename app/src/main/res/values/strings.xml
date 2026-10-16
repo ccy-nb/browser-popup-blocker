@@ -30,9 +30,6 @@
     <string name="section_strategy">拦截策略</string>
     <string name="sw_click_close">自动点击关闭按钮</string>
     <string name="sw_click_close_desc">识别到「关闭 / 跳过 / X」时自动点击。建议保持开启。</string>
-    <string name="sw_back_fallback">返回键兜底</string>
-    <string name="sw_back_fallback_desc">关掉关闭按钮点不到时才模拟返回键退出弹窗。</string>
-    <string name="back_fallback_warning">这是唯一会替你离开当前页面的动作。条件已经收紧到「窗口里确实有关闭文案但点不到」，仍然建议先用一段时间再决定是否开启。上一版的「莫名其妙退出」就是它造成的。</string>
     <string name="sw_aggressive">激进模式</string>
     <string name="sw_aggressive_desc">把角落里没有文字的小图标也当成关闭按钮。能多拦一些纯图片广告，但它属于「猜」，误触风险更高，默认关闭。</string>
     <string name="section_delay">识别延迟</string>
