@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="text_primary">#FFF2F3F5</color>
-    <color name="text_secondary">#FFA0A3AB</color>
+    <color name="text_primary">#FFF1F2F5</color>
+    <color name="text_secondary">#FFA0A4AE</color>
     <color name="outline">#FF3A3D45</color>
+    <color name="surface">#FF1B1D22</color>
     <color name="brand_container">#FF1E2960</color>
     <color name="brand_on_container">#FFDDE3FF</color>
 </resources>

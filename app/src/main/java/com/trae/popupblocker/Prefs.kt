@@ -1,10 +1,23 @@
 package com.trae.popupblocker
 
 import android.content.Context
+import android.os.SystemClock
 import androidx.core.content.edit
 
+/** 保护范围 */
+enum class ProtectMode {
+    /** 只保护浏览器（默认，最安全） */
+    BROWSERS,
+
+    /** 只保护用户手动勾选的应用 */
+    SELECTED,
+
+    /** 保护所有应用（误伤风险最高） */
+    ALL
+}
+
 /**
- * 应用配置存储。全部设置项都持久化在 SharedPreferences 里，
+ * 应用配置存储。全部设置项持久化在 SharedPreferences 里，
  * 无障碍服务进程可以随时读到，不需要额外的进程间通信。
  */
 class Prefs(context: Context) {
@@ -19,66 +32,89 @@ class Prefs(context: Context) {
             sp.edit { putBoolean(KEY_ENABLED, value) }
         }
 
-    /** true = 保护所有应用；false = 只保护勾选的浏览器 */
-    var protectAllApps: Boolean
-        get() = sp.getBoolean(KEY_PROTECT_ALL, false)
+    /** 保护范围 */
+    var mode: ProtectMode
+        get() = runCatching {
+            ProtectMode.valueOf(sp.getString(KEY_MODE, null) ?: ProtectMode.BROWSERS.name)
+        }.getOrDefault(ProtectMode.BROWSERS)
         set(value) {
-            sp.edit { putBoolean(KEY_PROTECT_ALL, value) }
+            sp.edit { putString(KEY_MODE, value.name) }
         }
 
-    /** 已勾选需要保护的浏览器包名；为空表示“默认全选当前已安装的浏览器” */
-    var protectedPackages: Set<String>
-        get() = sp.getStringSet(KEY_PACKAGES, null)?.toSet() ?: emptySet()
+    /** 自选应用的包名集合，仅在 [ProtectMode.SELECTED] 下生效 */
+    var selectedApps: Set<String>
+        get() = sp.getStringSet(KEY_SELECTED_APPS, null)?.toSet() ?: emptySet()
         set(value) {
-            sp.edit { putStringSet(KEY_PACKAGES, value) }
+            sp.edit { putStringSet(KEY_SELECTED_APPS, value) }
         }
 
-    /** 是否自动点击“关闭 / X”按钮 */
+    /** 是否自动点击「关闭 / 跳过 / X」 */
     var clickClose: Boolean
         get() = sp.getBoolean(KEY_CLICK_CLOSE, true)
         set(value) {
             sp.edit { putBoolean(KEY_CLICK_CLOSE, value) }
         }
 
-    /** 命中广告特征但找不到关闭按钮时，是否用返回键兜底 */
+    /**
+     * 返回键兜底。这是唯一会“替用户离开当前页面”的动作，误伤代价很高，
+     * 所以默认关闭，并且触发条件被限制得很死（窗口里确实存在关闭文案但点不到）。
+     */
     var backFallback: Boolean
-        get() = sp.getBoolean(KEY_BACK_FALLBACK, true)
+        get() = sp.getBoolean(KEY_BACK_FALLBACK, false)
         set(value) {
             sp.edit { putBoolean(KEY_BACK_FALLBACK, value) }
         }
 
-    /** 激进模式：连角落里没有文字的小图标也当作关闭按钮 */
+    /**
+     * 激进模式：把角落里没有文字的小图标也当成关闭按钮。
+     * 命中率更高，但属于“猜”，所以默认关闭。
+     */
     var aggressive: Boolean
-        get() = sp.getBoolean(KEY_AGGRESSIVE, true)
+        get() = sp.getBoolean(KEY_AGGRESSIVE, false)
         set(value) {
             sp.edit { putBoolean(KEY_AGGRESSIVE, value) }
         }
 
-    /** 触发“返回键兜底”所需的可疑度阈值，越高越保守 */
-    var threshold: Int
-        get() = sp.getInt(KEY_THRESHOLD, 4)
-        set(value) {
-            sp.edit { putInt(KEY_THRESHOLD, value.coerceIn(1, 12)) }
-        }
-
-    /** 识别到弹窗后延迟多久再动手（毫秒），给页面留出渲染时间 */
+    /** 识别到窗口变化后延迟多久再扫描（毫秒），给页面留出渲染时间 */
     var clickDelayMs: Long
         get() = sp.getLong(KEY_DELAY, 800L)
         set(value) {
-            sp.edit { putLong(KEY_DELAY, value.coerceIn(0L, 5000L)) }
+            sp.edit { putLong(KEY_DELAY, value.coerceIn(200L, 3000L)) }
         }
 
     /** 每次拦截后的冷却时间，避免连续误触 */
     val cooldownMs: Long get() = 1500L
 
+    // ------------------------------------------------------------ 临时暂停
+
+    private var pauseUntil: Long
+        get() = sp.getLong(KEY_PAUSE_UNTIL, 0L)
+        set(value) {
+            sp.edit { putLong(KEY_PAUSE_UNTIL, value) }
+        }
+
+    /** 当前是否处于临时暂停状态 */
+    fun isPaused(): Boolean = SystemClock.elapsedRealtime() < pauseUntil
+
+    /** 暂停剩余毫秒数，0 表示未暂停 */
+    fun pauseRemaining(): Long = (pauseUntil - SystemClock.elapsedRealtime()).coerceAtLeast(0L)
+
+    fun pause(minutes: Int) {
+        pauseUntil = SystemClock.elapsedRealtime() + minutes * 60_000L
+    }
+
+    fun resume() {
+        pauseUntil = 0L
+    }
+
     companion object {
         private const val KEY_ENABLED = "enabled"
-        private const val KEY_PROTECT_ALL = "protect_all"
-        private const val KEY_PACKAGES = "packages"
+        private const val KEY_MODE = "protect_mode"
+        private const val KEY_SELECTED_APPS = "selected_apps"
         private const val KEY_CLICK_CLOSE = "click_close"
         private const val KEY_BACK_FALLBACK = "back_fallback"
         private const val KEY_AGGRESSIVE = "aggressive"
-        private const val KEY_THRESHOLD = "threshold"
         private const val KEY_DELAY = "delay"
+        private const val KEY_PAUSE_UNTIL = "pause_until"
     }
 }

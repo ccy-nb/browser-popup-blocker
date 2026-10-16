@@ -14,25 +14,27 @@ class CloseCandidate(
 class ScanResult(
     /** 置信度最高的关闭按钮，找不到则为 null */
     val closeCandidate: CloseCandidate?,
-    /** 可疑度得分，越高越像垃圾弹窗 */
-    val score: Int,
-    /** 命中的特征，用于向用户解释“为什么拦了它” */
-    val signals: List<String>
+    /** 判定依据，用于向用户解释“为什么这么处理” */
+    val signals: List<String>,
+    /**
+     * 窗口里是否存在「关闭 / 跳过」这类文案——哪怕它不可点击。
+     * 只有它为 true 时才允许动用返回键兜底，避免在普通页面上乱按返回。
+     */
+    val hasCloseText: Boolean
 )
 
 /**
  * 弹窗检测引擎。
  *
- * 用“多信号打分 + 取关闭目标”而不是单一规则，因为各家浏览器把弹窗暴露到
- * 无障碍节点树的方式差别很大：
+ * 这一版的核心原则是**宁可漏，不可误**：上一版用「广告文案打分」触发动作，
+ * 而正常网页里「广告」「推广」「立即下载」这类字眼太常见，结果在用户正常浏览时
+ * 频繁误触发返回键。现在：
  *
- *  - 原生弹窗（Dialog / 广告 Activity）通常把文字和按钮完整暴露 → 靠关闭关键词命中；
- *  - 网页内弹窗（WebView）多半只暴露 DOM 文本 → 靠广告文案特征打分；
- *  - 纯图片广告往往只剩一个没有文字的角落小图标 → 靠“激进模式”的几何特征兜底。
- *
- * 合并三路信号后：
- *  - 拿到高置信度关闭按钮 → 直接点它；
- *  - 否则看可疑度是否达到阈值 → 交给上层用返回键兜底。
+ *  - 广告文案不再参与判定，只保留“关闭类”文案；
+ *  - 关闭文案分两档：明确无歧义的（关闭广告 / 跳过 / X）直接点；
+ *    有歧义的（关闭 / ×）必须通过结构校验——它得处在一个“大容器”里，
+ *    这样才不会点到浏览器工具栏和标签页上的关闭按钮；
+ *  - 反例词黑名单进一步挡掉标签页、书签、菜单这类正经按钮。
  */
 class PopupDetector(
     private val screenWidth: Int,
@@ -41,46 +43,62 @@ class PopupDetector(
     private val aggressive: Boolean
 ) {
 
-    companion object {
-        private const val MAX_NODES = 3000
-        private const val MAX_DEPTH = 30
-        private const val MAX_AD_HITS = 3
+    private val screenArea: Long = screenWidth.toLong() * screenHeight.toLong()
 
-        /** 明确的“关闭 / 跳过”语义，命中即可直接点击 */
-        private val CLOSE_WORDS = listOf(
-            "关闭广告", "关闭此广告", "关闭推广", "关闭",
-            "跳过广告", "跳过此广告", "跳过",
-            "close ad", "close", "skip ad", "skip", "dismiss", "no thanks",
-            "不再提示", "不再提醒", "以后再说", "稍后再说", "下次再说", "残忍拒绝",
-            "不感兴趣", "我知道了"
+    /** 命中大容器的最低面积占比；工具栏这类窄条达不到 */
+    private val largeContainerRatio = 22
+
+    private class Match(val word: String, val strong: Boolean)
+
+    companion object {
+        private const val MAX_NODES = 4000
+        private const val MAX_DEPTH = 32
+
+        /** 高置信度：文案本身就说明“这是要关掉当前弹窗”，命中即可点击 */
+        private val STRONG_WORDS = listOf(
+            "关闭广告", "关闭此广告", "关闭推广", "关闭该广告",
+            "跳过广告", "跳过此广告", "跳过该广告", "点击跳过", "跳过",
+            "closead", "closethisad", "skipad", "skipthisad", "skip"
+        )
+
+        /** 中置信度：常见但存在歧义，必须通过结构校验才点击 */
+        private val MEDIUM_WORDS = listOf(
+            "关闭", "close", "dismiss", "我知道了", "以后再说", "稍后再说",
+            "下次再说", "不再提示", "不再提醒", "残忍拒绝", "不感兴趣"
         )
 
         /**
-         * 反例词：命中“关闭”但其实是正经功能按钮，绝不能点。
-         * 典型的就是浏览器标签页上的小叉，点了会关掉用户自己的标签。
+         * 反例词：出现这些词的“关闭”属于正经功能按钮，绝对不能点。
+         * 这正是上一版会莫名其妙关掉用户标签页 / 退出页面的原因。
          */
-        private val CLOSE_WORD_BLOCKLIST = listOf(
-            "标签", "标签页", "tab", "窗口", "书签", "历史", "下载", "设置", "菜单",
-            "关闭键盘", "书签栏", "无痕", "隐私"
+        private val BLOCK_WORDS = listOf(
+            "标签", "tab", "窗口", "书签", "历史", "下载", "设置", "菜单",
+            "扩展", "插件", "隐私", "通知", "无痕", "页面", "刷新", "翻译",
+            "分享", "更多", "新建", "收藏", "主页", "返回", "前进", "地址栏",
+            "搜索栏", "键盘", "输入法", "播放", "通话", "挂断"
         )
 
-        /** X 形状的字符，常见于“点这里关闭”的小图标 */
+        /** X 形状的字符，必须整段只有这个符号才算数 */
         private val X_GLYPHS = setOf("×", "✕", "✖", "╳", "☓", "✗", "✘", "x", "X")
 
-        /** 广告文案特征，用于“有广告内容但找不到关闭按钮 → 返回键兜底” */
-        private val AD_WORDS = listOf(
-            "广告", "推广", "赞助", "advertisement", "sponsored",
-            "立即下载", "点击下载", "免费下载", "点击安装", "立即安装",
-            "打开app", "打开应用", "摇一摇", "抽奖", "红包", "立即领取", "恭喜你"
-        )
+        private val STRONG_NORM = STRONG_WORDS.map { normalize(it) }
+        private val MEDIUM_NORM = MEDIUM_WORDS.map { normalize(it) }
+        private val BLOCK_NORM = BLOCK_WORDS.map { normalize(it) }
+
+        /** 去掉空白、零宽字符和变体选择符，让 “✖️” 和 “x” 都能归一化 */
+        private fun normalize(label: String): String =
+            label.replace(" ", "")
+                .replace("\uFE0F", "")
+                .replace("\u200B", "")
+                .replace("\u00A0", "")
+                .lowercase()
     }
 
     fun scan(root: AccessibilityNodeInfo): ScanResult {
         val signals = mutableListOf<String>()
-        val adHits = mutableSetOf<String>()
         var best: CloseCandidate? = null
-        var cornerCandidate: AccessibilityNodeInfo? = null
-        var cornerReason: String? = null
+        var hasCloseText = false
+        var cornerNode: AccessibilityNodeInfo? = null
 
         val queue = ArrayDeque<Pair<AccessibilityNodeInfo, Int>>()
         queue.addLast(root to 0)
@@ -94,36 +112,44 @@ class PopupDetector(
                 val rect = Rect()
                 node.getBoundsInScreen(rect)
                 val hasBounds = rect.width() > 0 && rect.height() > 0
-                val label = labelOf(node)
+                val label = if (hasBounds) labelOf(node) else ""
 
-                if (hasBounds && label.isNotEmpty()) {
-                    // 信号 1：关闭 / 跳过 文案
-                    val hit = matchCloseWord(label)
-                    if (hit != null) {
-                        val direct = node.takeIf { it.isClickable && it.isEnabled }
-                        val target = direct ?: findClickableAncestor(node)
+                if (label.isNotEmpty()) {
+                    val match = matchClose(label)
+
+                    if (match != null) {
+                        hasCloseText = true
+                        val target = resolveClickable(node)
                         if (target != null) {
-                            val confidence = if (direct != null) 10 else 7
-                            val previous = best
-                            if (previous == null || confidence > previous.confidence) {
-                                best = CloseCandidate(target, "命中关闭文案「$hit」", confidence)
+                            // 歧义文案必须处在大容器里，否则很可能是在点工具栏
+                            val acceptable = match.strong || inLargeContainer(node, root)
+                            if (acceptable) {
+                                val confidence = if (match.strong) 10 else 7
+                                val previous = best
+                                if (previous == null || confidence > previous.confidence) {
+                                    best = CloseCandidate(
+                                        target,
+                                        "命中关闭文案「${match.word}」",
+                                        confidence
+                                    )
+                                }
+                            } else {
+                                signals += "「${match.word}」疑为工具栏按钮，已跳过"
                             }
+                        } else {
+                            signals += "「${match.word}」不可点击，跳过"
                         }
-                    }
-
-                    // 信号 2：广告文案特征（每命中一个新词加一分）
-                    for (word in AD_WORDS) {
-                        if (adHits.size >= MAX_AD_HITS) break
-                        if (label.contains(word, ignoreCase = true)) adHits.add(word)
+                    } else if (isBlocked(label)) {
+                        // 命中反例词，明确记录一下，方便排查
+                        signals += "已忽略疑似标签页/工具栏的关闭按钮"
                     }
                 }
 
-                // 信号 3：角落里没有文字的关闭小图标（激进模式）
-                if (aggressive && cornerCandidate == null && hasBounds &&
-                    isCornerCloseButton(node, label, rect)
+                // 激进模式：角落里没有文字的小图标，且必须处在大容器内
+                if (aggressive && best == null && cornerNode == null && hasBounds &&
+                    isCornerCloseButton(node, label, rect, root)
                 ) {
-                    cornerCandidate = node
-                    cornerReason = "疑似角落关闭按钮"
+                    cornerNode = node
                 }
             }
 
@@ -135,25 +161,20 @@ class PopupDetector(
             }
         }
 
-        val baseScore = adHits.size
-        if (adHits.isNotEmpty()) {
-            signals += "广告文案：" + adHits.joinToString("、")
-        }
-
         val close = best
         if (close != null) {
-            signals += close.reason
-            return ScanResult(close, baseScore + close.confidence, signals)
+            signals.add(0, close.reason)
+            return ScanResult(close, signals, hasCloseText)
         }
 
-        val corner = cornerCandidate
+        val corner = cornerNode
         if (corner != null) {
-            val reason = cornerReason ?: "疑似角落关闭按钮"
-            signals += reason
-            return ScanResult(CloseCandidate(corner, reason, 5), baseScore + 5, signals)
+            val reason = "疑似角落关闭按钮"
+            signals.add(0, reason)
+            return ScanResult(CloseCandidate(corner, reason, 5), signals, hasCloseText)
         }
 
-        return ScanResult(null, baseScore, signals)
+        return ScanResult(null, signals, hasCloseText)
     }
 
     private fun labelOf(node: AccessibilityNodeInfo): String {
@@ -166,43 +187,69 @@ class PopupDetector(
         }
     }
 
-    private fun matchCloseWord(label: String): String? {
-        val cleaned = cleanGlyph(label)
+    private fun matchClose(label: String): Match? {
+        val norm = normalize(label)
 
-        // X 字形优先：通常就表示“关闭本弹窗”
-        if (X_GLYPHS.contains(cleaned)) return cleaned
+        // 纯 X 字形：整段只有这个符号才算，避免把 “x264 视频” 之类误判
+        if (X_GLYPHS.contains(norm)) return Match(label.trim(), true)
 
-        val lower = label.lowercase()
-        // 先排除正经功能按钮，避免点到标签页关闭、菜单之类
-        if (CLOSE_WORD_BLOCKLIST.any { lower.contains(it.lowercase()) }) return null
-        return CLOSE_WORDS.firstOrNull { lower.contains(it.lowercase()) }
+        // 先排除正经功能按钮
+        if (BLOCK_NORM.any { norm.contains(it) }) return null
+
+        STRONG_NORM.firstOrNull { norm.startsWith(it) }?.let { return Match(it, true) }
+        MEDIUM_NORM.firstOrNull { norm.startsWith(it) }?.let { return Match(it, false) }
+        return null
+    }
+
+    /** 只用于日志提示，判断这段文案是不是被反例词挡下来了 */
+    private fun isBlocked(label: String): Boolean {
+        val norm = normalize(label)
+        return BLOCK_NORM.any { norm.contains(it) && norm.contains("关闭") }
     }
 
     /**
-     * 角落里的小图标判定：没有文字（或纯粹是 X）、尺寸很小、位于屏幕四角之一。
-     * 浏览器工具栏里的按钮一般带有内容描述（如“重新加载此页面”），
-     * 所以要求 label 为空，能挡掉大部分误判。
+     * 结构校验：从候选节点往上走，能不能找到一个面积足够大的祖先容器。
+     *
+     * 广告弹窗的关闭按钮一定长在一个铺满屏幕的浮层里；而浏览器标签页、
+     * 工具栏上的关闭按钮，祖先一路都是窄条，走不到大容器 → 被判为不安全。
      */
+    private fun inLargeContainer(node: AccessibilityNodeInfo, root: AccessibilityNodeInfo): Boolean {
+        if (screenArea <= 0L) return false
+        var parent = node.parent
+        var hops = 0
+        while (parent != null && parent !== root && hops < 8) {
+            val rect = Rect()
+            parent.getBoundsInScreen(rect)
+            val area = rect.width().toLong() * rect.height().toLong()
+            if (area * 100 >= screenArea * largeContainerRatio) return true
+            parent = parent.parent
+            hops++
+        }
+        return false
+    }
+
     private fun isCornerCloseButton(
         node: AccessibilityNodeInfo,
         label: String,
-        rect: Rect
+        rect: Rect,
+        root: AccessibilityNodeInfo
     ): Boolean {
         if (!node.isClickable || !node.isEnabled) return false
 
-        val cleaned = cleanGlyph(label)
-        if (cleaned.isNotEmpty() && !X_GLYPHS.contains(cleaned)) return false
+        val norm = normalize(label)
+        if (norm.isNotEmpty() && !X_GLYPHS.contains(norm)) return false
 
-        val minSize = (12 * density).toInt()
+        val minSize = (14 * density).toInt()
         if (rect.width() < minSize || rect.height() < minSize) return false
 
+        // 比上一版更严：面积不得超过屏幕 2%
         val area = rect.width().toLong() * rect.height().toLong()
-        val screenArea = screenWidth.toLong() * screenHeight.toLong()
-        if (screenArea <= 0L) return false
-        if (area * 100 > screenArea * 3) return false // 超过屏幕 3% 面积就不算“小图标”
+        if (screenArea <= 0L || area * 100 > screenArea * 2) return false
 
-        val zoneX = screenWidth * 30 / 100
-        val zoneY = screenHeight * 30 / 100
+        if (!inLargeContainer(node, root)) return false
+
+        val zoneX = screenWidth * 28 / 100
+        val zoneY = screenHeight * 28 / 100
         val nearLeft = rect.centerX() <= zoneX
         val nearRight = rect.centerX() >= screenWidth - zoneX
         val nearTop = rect.centerY() <= zoneY
@@ -211,17 +258,11 @@ class PopupDetector(
         return (nearLeft || nearRight) && (nearTop || nearBottom)
     }
 
-    /** 去掉空白和变体选择符，便于把 “✖️” 也识别成 X */
-    private fun cleanGlyph(label: String): String =
-        label.replace(" ", "")
-            .replace("\uFE0F", "")
-            .replace("\u200B", "")
-            .replace("\u00A0", "")
-
-    private fun findClickableAncestor(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    private fun resolveClickable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isClickable && node.isEnabled) return node
         var parent = node.parent
         var hops = 0
-        while (parent != null && hops < 4) {
+        while (parent != null && hops < 3) {
             if (parent.isClickable && parent.isEnabled) return parent
             parent = parent.parent
             hops++

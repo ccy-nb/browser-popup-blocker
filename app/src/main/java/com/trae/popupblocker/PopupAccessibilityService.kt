@@ -10,30 +10,39 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 
 /**
- * 核心无障碍服务：监听窗口变化，从页面上找出垃圾弹窗并自动关掉。
+ * 核心无障碍服务：监听窗口变化，从页面上找出垃圾弹窗并处理掉。
  *
- * 处理流程：
- *  1. 只处理目标应用（默认是所有浏览器）的窗口事件，并且做去抖，等页面渲染稳定；
- *  2. 用 [PopupDetector] 扫描当前窗口的节点树，拿到“关闭目标 + 可疑度”；
- *  3. 有明确关闭按钮就直接点击；只有可疑度达标才用返回键兜底，避免误伤；
- *  4. 每次动作后进入冷却期，防止连点。
+ * 相比上一版的三处关键改动：
+ *  1. 去抖不再重置计时器（上一版在事件风暴下扫描任务永远不执行，
+ *     导致倒计时开屏广告的「跳过」点不到）；
+ *  2. 窗口出现后做多轮重试，覆盖「倒计时结束才出现跳过按钮」的情况；
+ *  3. 返回键兜底被限制成「窗口里确实有跳过/关闭文案、但找不到可点击目标时」才触发，
+ *     并且默认关闭——它是唯一会替用户离开当前页面的动作。
  */
 class PopupAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "PopupBlocker"
 
-        /** 同一个窗口连续拦截超过这个次数，就认为点不掉，暂时收手 */
-        private const val MAX_ACTIONS_PER_WINDOW = 3
+        /** 同一窗口连续处理超过这个次数就认为点不掉，暂时收手 */
+        private const val MAX_ACTIONS_PER_WINDOW = 2
+
+        /** 窗口出现后的多轮重试间隔（毫秒），用于等倒计时结束后才出现的跳过按钮 */
+        private val RETRY_INTERVALS = longArrayOf(1000L, 1200L, 1600L, 2200L, 3000L)
+
+        /** 这些系统界面绝不处理，避免把系统自己的窗口当成弹窗 */
+        private val SYSTEM_DENY = setOf(
+            "com.android.systemui",
+            "com.android.settings",
+            "com.android.packageinstaller",
+            "com.google.android.packageinstaller",
+            "android"
+        )
     }
 
     private val prefs: Prefs by lazy { Prefs(this) }
     private val handler = Handler(Looper.getMainLooper())
-    private val scanTask = Runnable { runScan() }
-
-    private val knownBrowsers: Set<String> by lazy {
-        BrowserUtils.installedBrowsers(this).map { it.packageName }.toSet()
-    }
+    private val knownBrowsers: Set<String> by lazy { AppUtils.browsers(this) }
 
     private var lastWindowSignature: String? = null
     private var lastActionAt = 0L
@@ -41,31 +50,50 @@ class PopupAccessibilityService : AccessibilityService() {
     private var actionWindowSignature: String? = null
     private var actionsInCurrentWindow = 0
 
+    private var retryIndex = 0
+
+    private val scanTask = Runnable { runScan() }
+
+    private val retryTask = object : Runnable {
+        override fun run() {
+            runScan()
+            retryIndex++
+            if (retryIndex < RETRY_INTERVALS.size) {
+                handler.postDelayed(this, RETRY_INTERVALS[retryIndex])
+            }
+        }
+    }
+
     override fun onServiceConnected() {
         super.onServiceConnected()
-        Log.i(TAG, "无障碍服务已连接，已识别浏览器 ${knownBrowsers.size} 个")
+        Log.i(TAG, "服务已连接，识别到浏览器 ${knownBrowsers.size} 个")
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
-        handler.removeCallbacks(scanTask)
+        cancelAll()
         return super.onUnbind(intent)
     }
 
     override fun onInterrupt() {
-        handler.removeCallbacks(scanTask)
+        cancelAll()
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(scanTask)
+        cancelAll()
         super.onDestroy()
+    }
+
+    private fun cancelAll() {
+        handler.removeCallbacks(scanTask)
+        handler.removeCallbacks(retryTask)
+        retryIndex = 0
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-        if (!prefs.enabled) return
+        if (!prefs.enabled || prefs.isPaused()) return
 
         val pkg = event.packageName?.toString() ?: return
-        if (pkg == packageName) return // 别拦自己
         if (!shouldProtect(pkg)) return
 
         when (event.eventType) {
@@ -74,36 +102,47 @@ class PopupAccessibilityService : AccessibilityService() {
                 if (signature == lastWindowSignature) return
                 lastWindowSignature = signature
                 scheduleScan()
+                armRetries()
             }
 
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                // 页面渲染过程中内容事件非常密集，这里统一去抖
-                scheduleScan()
-            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> scheduleScan()
         }
     }
 
+    /**
+     * 关键修复：只在没有排程时才排，绝不做 remove + postDelayed。
+     *
+     * 上一版每次事件都重置计时器，而开屏广告的倒计时动画会持续不断地产生内容变化事件，
+     * 计时器被无限往后推，扫描任务实际上永远不会执行——这就是「跳过」点不到的根因。
+     */
     private fun scheduleScan() {
-        handler.removeCallbacks(scanTask)
+        if (handler.hasCallbacks(scanTask)) return
         handler.postDelayed(scanTask, prefs.clickDelayMs)
     }
 
+    private fun armRetries() {
+        handler.removeCallbacks(retryTask)
+        retryIndex = 0
+        handler.postDelayed(retryTask, RETRY_INTERVALS[0])
+    }
+
     private fun shouldProtect(pkg: String): Boolean {
-        if (prefs.protectAllApps) return true
-        val selected = prefs.protectedPackages
-        // 用户还没手动配置时，默认保护所有已安装浏览器
-        if (selected.isEmpty()) return knownBrowsers.contains(pkg)
-        return selected.contains(pkg)
+        if (pkg == packageName) return false
+        if (SYSTEM_DENY.contains(pkg)) return false
+        return when (prefs.mode) {
+            ProtectMode.ALL -> true
+            ProtectMode.BROWSERS -> knownBrowsers.contains(pkg)
+            ProtectMode.SELECTED -> prefs.selectedApps.contains(pkg)
+        }
     }
 
     private fun runScan() {
-        if (!prefs.enabled) return
+        if (!prefs.enabled || prefs.isPaused()) return
         if (SystemClock.uptimeMillis() - lastActionAt < prefs.cooldownMs) return
-        if (isActionExhaustedForCurrentWindow()) return
+        if (isActionExhausted()) return
 
         val root = rootInActiveWindow ?: return
         val pkg = root.packageName?.toString() ?: return
-        if (pkg == packageName) return
         if (!shouldProtect(pkg)) return
 
         val metrics = resources.displayMetrics
@@ -115,7 +154,7 @@ class PopupAccessibilityService : AccessibilityService() {
         )
         val result = detector.scan(root)
 
-        // 优先点“关闭 / X”
+        // 首选：直接点掉关闭按钮
         val candidate = result.closeCandidate
         if (candidate != null && prefs.clickClose) {
             if (click(candidate.node)) {
@@ -124,19 +163,17 @@ class PopupAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 找不到关闭按钮但广告特征明显 → 返回键兜底
-        if (prefs.backFallback && result.score >= prefs.threshold) {
-            val detail = result.signals.joinToString("、").ifEmpty { "广告特征" }
+        // 兜底：窗口里确实存在关闭文案，但一个可点击目标都没找到，才允许按返回
+        if (prefs.backFallback && candidate == null && result.hasCloseText) {
             if (performGlobalAction(GLOBAL_ACTION_BACK)) {
-                record(pkg, "广告特征明显（$detail），执行返回键兜底")
+                record(pkg, "窗口内有「关闭/跳过」文案但无可点击目标，执行返回键兜底")
             }
         }
     }
 
-    private fun isActionExhaustedForCurrentWindow(): Boolean {
-        val sig = lastWindowSignature
-        return sig != null && sig == actionWindowSignature &&
-            actionsInCurrentWindow >= MAX_ACTIONS_PER_WINDOW
+    private fun isActionExhausted(): Boolean {
+        val signature = lastWindowSignature ?: return false
+        return signature == actionWindowSignature && actionsInCurrentWindow >= MAX_ACTIONS_PER_WINDOW
     }
 
     private fun click(node: AccessibilityNodeInfo): Boolean {
@@ -157,13 +194,13 @@ class PopupAccessibilityService : AccessibilityService() {
 
     private fun record(pkg: String, reason: String) {
         lastActionAt = SystemClock.uptimeMillis()
-        handler.removeCallbacks(scanTask)
+        cancelAll()
 
-        val sig = lastWindowSignature
-        if (sig != null && sig == actionWindowSignature) {
+        val signature = lastWindowSignature
+        if (signature != null && signature == actionWindowSignature) {
             actionsInCurrentWindow++
         } else {
-            actionWindowSignature = sig
+            actionWindowSignature = signature
             actionsInCurrentWindow = 1
         }
 
@@ -172,10 +209,10 @@ class PopupAccessibilityService : AccessibilityService() {
             BlockRecord(
                 time = System.currentTimeMillis(),
                 packageName = pkg,
-                appLabel = BrowserUtils.appLabel(this, pkg),
+                appLabel = AppUtils.label(this, pkg),
                 reason = reason
             )
         )
-        Log.i(TAG, "已拦截 [$pkg] $reason")
+        Log.i(TAG, "已处理 [$pkg] $reason")
     }
 }

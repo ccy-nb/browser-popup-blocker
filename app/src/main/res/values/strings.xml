@@ -1,49 +1,75 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">弹窗拦截</string>
-    <string name="app_subtitle">自动识别并关闭浏览器里的垃圾弹窗</string>
 
-    <!-- 服务状态 -->
+    <!-- 页签 -->
+    <string name="tab_protection">保护</string>
+    <string name="tab_apps">应用</string>
+    <string name="tab_logs">记录</string>
+
+    <!-- 顶部状态卡 -->
+    <string name="status_running">保护中</string>
+    <string name="status_paused">已暂停</string>
+    <string name="status_off">拦截已关闭</string>
+    <string name="status_disabled">无障碍服务未开启</string>
+    <string name="status_sub_running">范围：%1$s · 累计拦截 %2$d 次</string>
+    <string name="status_sub_paused">暂停中，%1$s 后自动恢复</string>
+    <string name="status_sub_off">总开关已关闭，不会做任何处理</string>
+    <string name="status_sub_disabled">拦截不会生效，点「去开启」打开无障碍服务</string>
+    <string name="scope_browsers_short">仅浏览器</string>
+    <string name="scope_selected_short">自选 %1$d 个应用</string>
+    <string name="scope_all_short">所有应用</string>
+    <string name="action_pause">暂停 10 分钟</string>
+    <string name="action_resume">恢复拦截</string>
+    <string name="action_enable">去开启</string>
+
+    <!-- 保护页 -->
+    <string name="section_switch">拦截总开关</string>
+    <string name="sw_enabled">启用弹窗拦截</string>
+    <string name="sw_enabled_desc">关闭后所有规则立即停用</string>
+    <string name="section_strategy">拦截策略</string>
+    <string name="sw_click_close">自动点击关闭按钮</string>
+    <string name="sw_click_close_desc">识别到「关闭 / 跳过 / X」时自动点击。建议保持开启。</string>
+    <string name="sw_back_fallback">返回键兜底</string>
+    <string name="sw_back_fallback_desc">关掉关闭按钮点不到时才模拟返回键退出弹窗。</string>
+    <string name="back_fallback_warning">这是唯一会替你离开当前页面的动作。条件已经收紧到「窗口里确实有关闭文案但点不到」，仍然建议先用一段时间再决定是否开启。上一版的「莫名其妙退出」就是它造成的。</string>
+    <string name="sw_aggressive">激进模式</string>
+    <string name="sw_aggressive_desc">把角落里没有文字的小图标也当成关闭按钮。能多拦一些纯图片广告，但它属于「猜」，误触风险更高，默认关闭。</string>
+    <string name="section_delay">识别延迟</string>
+    <string name="delay_desc">检测到窗口变化后等待多久再扫描。小一点反应快，大一点更不容易误判。</string>
+    <string name="delay_value">当前 %1$d 毫秒</string>
     <string name="section_service">无障碍服务</string>
-    <string name="service_on">已开启 · 正在保护中</string>
-    <string name="service_off">未开启 · 拦截不会生效</string>
+    <string name="service_state_on">已连接，正在保护中</string>
+    <string name="service_state_off">未开启</string>
     <string name="service_tip">拦截完全依赖无障碍服务读取窗口内容。请在系统设置里找到「弹窗拦截」并打开开关。</string>
     <string name="enable_accessibility">去开启无障碍服务</string>
     <string name="open_accessibility_settings">查看无障碍设置</string>
     <string name="open_settings_failed">无法打开系统设置，请手动前往「设置 - 无障碍」</string>
 
-    <!-- 拦截开关 -->
-    <string name="section_switch">拦截设置</string>
-    <string name="switch_enabled">拦截总开关</string>
-    <string name="switch_enabled_desc">关闭后所有规则立即停用</string>
-    <string name="switch_protect_all">保护所有应用</string>
-    <string name="switch_protect_all_desc">默认只保护浏览器，开启后所有应用里的弹窗都会处理</string>
-    <string name="switch_click_close">自动点击关闭按钮</string>
-    <string name="switch_click_close_desc">识别到「关闭 / 跳过 / X」等按钮时自动点击</string>
-    <string name="switch_back_fallback">返回键兜底</string>
-    <string name="switch_back_fallback_desc">弹窗里找不到关闭按钮，但广告特征明显时，模拟返回键退出</string>
-    <string name="switch_aggressive">激进模式</string>
-    <string name="switch_aggressive_desc">把角落里没有文字的小图标也当成关闭按钮，命中率更高，但误判风险略增</string>
+    <!-- 应用页 -->
+    <string name="section_scope">保护范围</string>
+    <string name="scope_browsers">仅浏览器</string>
+    <string name="scope_browsers_desc">自动保护设备上所有能打开网页的应用。最安全，默认选它。</string>
+    <string name="scope_selected">自选应用</string>
+    <string name="scope_selected_desc">只保护下面勾选的应用。其他软件的开屏广告就靠这一档来处理。</string>
+    <string name="scope_all">所有应用</string>
+    <string name="scope_all_desc">所有应用都会处理（系统界面除外）。拦得最全，也最容易误伤，慎用。</string>
+    <string name="section_apps">选择应用</string>
+    <string name="app_search_hint">搜索应用名或包名</string>
+    <string name="app_selected_count">已选 %1$d 个应用</string>
+    <string name="apps_locked_hint">当前保护范围不是「自选应用」，下面的勾选暂不生效</string>
+    <string name="apps_loading">正在读取应用列表…</string>
+    <string name="apps_empty">没有匹配的应用</string>
+    <string name="app_browser_tag">浏览器</string>
 
-    <!-- 延迟 -->
-    <string name="section_delay">识别延迟</string>
-    <string name="delay_desc">检测到窗口变化后，等待这段时间再动手，避免页面还没渲染完就误点</string>
-    <string name="delay_value">当前：%1$d 毫秒</string>
-
-    <!-- 浏览器 -->
-    <string name="section_browsers">受保护的浏览器</string>
-    <string name="browser_hint">检测到 %1$d 个可打开网页的应用，默认全部保护</string>
-    <string name="browser_empty">没有检测到浏览器</string>
-    <string name="browser_protect_all_hint">已开启「保护所有应用」，下面的列表暂不生效</string>
-
-    <!-- 拦截记录 -->
+    <!-- 记录页 -->
     <string name="section_logs">拦截记录</string>
     <string name="count_value">累计拦截 %1$d 次</string>
     <string name="clear_logs">清空记录</string>
-    <string name="empty_logs">还没有拦截记录。去浏览器里逛一逛，被拦下来的弹窗会显示在这里。</string>
+    <string name="empty_logs">还没有记录。去浏览器或你勾选的应用里逛一逛，被处理掉的弹窗会显示在这里，并附上判定依据。</string>
 
     <!-- 无障碍服务描述 -->
     <string name="accessibility_label">弹窗拦截</string>
-    <string name="accessibility_summary">自动关闭浏览器中的垃圾弹窗</string>
-    <string name="accessibility_desc">开启后，本服务会读取屏幕上的窗口内容，识别出广告弹窗并自动点击关闭或返回。只在本机处理，不会上传任何数据。</string>
+    <string name="accessibility_summary">自动关闭浏览器和应用中的垃圾弹窗</string>
+    <string name="accessibility_desc">开启后，本服务会读取屏幕上的窗口内容，识别出广告弹窗并自动点击关闭。只在本机处理，不会上传任何数据。</string>
 </resources>

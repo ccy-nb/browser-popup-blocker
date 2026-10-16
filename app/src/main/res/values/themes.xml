@@ -7,19 +7,35 @@
         <item name="colorOnPrimaryContainer">@color/brand_on_container</item>
     </style>
 
+    <style name="TextAppearance.App.SectionTitle" parent="TextAppearance.Material3.TitleMedium">
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
     <!-- 设置项开关：只补布局属性，外观仍走控件自身的默认样式 -->
     <style name="Widget.App.SettingSwitch" parent="">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
         <item name="android:paddingTop">10dp</item>
-        <item name="android:paddingBottom">10dp</item>
+        <item name="android:paddingBottom">2dp</item>
     </style>
 
-    <style name="Widget.App.SectionTitle" parent="">
-        <item name="android:layout_width">wrap_content</item>
+    <!-- 开关下面的说明文字 -->
+    <style name="Widget.App.SettingDesc" parent="">
+        <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
-        <item name="android:textColor">@color/text_primary</item>
-        <item name="android:textSize">16sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:layout_marginBottom">6dp</item>
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:lineSpacingExtra">2dp</item>
+    </style>
+
+    <!-- 卡片内分隔线 -->
+    <style name="Widget.App.Divider" parent="">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">1dp</item>
+        <item name="android:layout_marginTop">10dp</item>
+        <item name="android:layout_marginBottom">4dp</item>
+        <item name="android:background">@color/outline</item>
     </style>
 </resources>

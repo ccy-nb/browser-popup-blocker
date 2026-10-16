@@ -1,12 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 只查询能打开 http/https 的应用，用于识别已安装的浏览器 -->
+    <!--
+      声明需要查询的两类应用，用于枚举浏览器和可启动应用。
+      有了这两条就不需要 QUERY_ALL_PACKAGES 这种宽泛权限。
+    -->
     <queries>
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />
             <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
         </intent>
     </queries>
 
@@ -27,7 +34,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 核心：拦截弹窗靠无障碍服务读取窗口内容并自动点击关闭 -->
+        <!-- 核心：拦截弹窗靠无障碍服务读取窗口内容并自动处理 -->
         <service
             android:name=".PopupAccessibilityService"
             android:exported="true"

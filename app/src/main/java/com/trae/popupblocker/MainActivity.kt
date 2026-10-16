@@ -2,22 +2,33 @@ package com.trae.popupblocker
 
 import android.content.ComponentName
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.TextUtils
-import android.widget.CheckBox
-import android.widget.CompoundButton
+import android.view.View
+import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.tabs.TabLayoutMediator
 import com.trae.popupblocker.databinding.ActivityMainBinding
 
 class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var prefs: Prefs
-    private val logAdapter = BlockLogAdapter()
+    private val handler = Handler(Looper.getMainLooper())
 
-    private val onLogChanged: () -> Unit = { refreshLogs() }
+    /** 暂停期间每秒刷新一次倒计时 */
+    private val pausedTicker = object : Runnable {
+        override fun run() {
+            refreshStatus()
+            if (prefs.isPaused()) handler.postDelayed(this, 1000L)
+        }
+    }
+
+    private val logListener: () -> Unit = { refreshStatus() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,184 +36,131 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         prefs = Prefs(this)
 
-        setupSwitches()
-        setupDelaySlider()
-        setupBrowserList()
-        setupLogList()
+        binding.viewPager.adapter = MainPagerAdapter(this)
+        binding.viewPager.offscreenPageLimit = 2
+        TabLayoutMediator(binding.tabLayout, binding.viewPager) { tab, position ->
+            tab.text = getString(
+                when (position) {
+                    0 -> R.string.tab_protection
+                    1 -> R.string.tab_apps
+                    else -> R.string.tab_logs
+                }
+            )
+        }.attach()
 
-        binding.btnAccessibility.setOnClickListener {
-            runCatching {
-                startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-            }.onFailure {
-                toast(getString(R.string.open_settings_failed))
-            }
-        }
-
-        binding.btnClearLogs.setOnClickListener {
-            if (BlockLogStore.all().isEmpty()) return@setOnClickListener
-            BlockLogStore.clear(this)
-        }
+        binding.btnEnable.setOnClickListener { openAccessibilitySettings() }
+        binding.btnPause.setOnClickListener { togglePause() }
     }
 
     override fun onResume() {
         super.onResume()
-        BlockLogStore.addListener(onLogChanged)
-        refreshServiceStatus()
-        refreshSwitches()
-        refreshLogs()
+        refreshStatus()
+        BlockLogStore.addListener(logListener)
+        handler.removeCallbacks(pausedTicker)
+        if (prefs.isPaused()) handler.postDelayed(pausedTicker, 1000L)
     }
 
     override fun onPause() {
         super.onPause()
-        BlockLogStore.removeListener(onLogChanged)
+        BlockLogStore.removeListener(logListener)
+        handler.removeCallbacks(pausedTicker)
     }
 
-    // ---------------------------------------------------------------- 开关区
-
-    private fun setupSwitches() {
-        bindSwitch(binding.swEnabled, { prefs.enabled }, { prefs.enabled = it })
-        bindSwitch(binding.swProtectAll, { prefs.protectAllApps }, {
-            prefs.protectAllApps = it
-            updateBrowserListEnabled()
-        })
-        bindSwitch(binding.swClickClose, { prefs.clickClose }, { prefs.clickClose = it })
-        bindSwitch(binding.swBackFallback, { prefs.backFallback }, { prefs.backFallback = it })
-        bindSwitch(binding.swAggressive, { prefs.aggressive }, { prefs.aggressive = it })
+    fun openAccessibilitySettings() {
+        runCatching {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }.onFailure {
+            Toast.makeText(this, R.string.open_settings_failed, Toast.LENGTH_LONG).show()
+        }
     }
 
-    /** 先把当前状态同步到控件，再挂监听，避免初始化时触发一次多余的写入 */
-    private fun bindSwitch(
-        view: CompoundButton,
-        getter: () -> Boolean,
-        setter: (Boolean) -> Unit
-    ) {
-        view.setOnCheckedChangeListener(null)
-        view.isChecked = getter()
-        view.setOnCheckedChangeListener { _, checked -> setter(checked) }
-    }
+    /** 供各页签在设置变化后回调，刷新顶部状态卡 */
+    fun refreshStatus() {
+        val serviceOn = isServiceEnabled()
+        val paused = serviceOn && prefs.enabled && prefs.isPaused()
 
-    private fun refreshSwitches() {
-        setupSwitches()
-        updateBrowserListEnabled()
-    }
-
-    // ------------------------------------------------------------ 延迟调节
-
-    private fun setupDelaySlider() {
-        binding.seekDelay.max = 3000
-        binding.seekDelay.setOnSeekBarChangeListener(
-            object : android.widget.SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(
-                    seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean
-                ) {
-                    binding.tvDelayValue.text = getString(R.string.delay_value, progress)
-                    if (fromUser) prefs.clickDelayMs = progress.toLong()
-                }
-
-                override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
-
-                override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) = Unit
+        val titleRes: Int
+        val colorRes: Int
+        when {
+            !serviceOn -> {
+                titleRes = R.string.status_disabled
+                colorRes = R.color.status_bad
             }
+            !prefs.enabled -> {
+                titleRes = R.string.status_off
+                colorRes = R.color.status_bad
+            }
+            paused -> {
+                titleRes = R.string.status_paused
+                colorRes = R.color.status_warn
+            }
+            else -> {
+                titleRes = R.string.status_running
+                colorRes = R.color.status_ok
+            }
+        }
+
+        binding.tvStatusTitle.setText(titleRes)
+        binding.tvStatusTitle.setTextColor(getColor(colorRes))
+        binding.statusDot.backgroundTintList = ColorStateList.valueOf(getColor(colorRes))
+
+        binding.tvStatusSubtitle.text = when {
+            !serviceOn -> getString(R.string.status_sub_disabled)
+            !prefs.enabled -> getString(R.string.status_sub_off)
+            paused -> getString(
+                R.string.status_sub_paused,
+                formatRemaining(prefs.pauseRemaining())
+            )
+            else -> getString(
+                R.string.status_sub_running,
+                scopeLabel(),
+                BlockLogStore.total(this)
+            )
+        }
+
+        binding.btnEnable.visibility = if (serviceOn) View.GONE else View.VISIBLE
+        binding.btnPause.visibility = if (serviceOn) View.VISIBLE else View.GONE
+        binding.btnPause.text = getString(
+            if (paused) R.string.action_resume else R.string.action_pause
         )
-        val current = prefs.clickDelayMs.toInt()
-        binding.seekDelay.progress = current
-        binding.tvDelayValue.text = getString(R.string.delay_value, current)
     }
 
-    // -------------------------------------------------------- 浏览器白名单
-
-    private fun setupBrowserList() {
-        val container = binding.layoutBrowsers
-        container.removeAllViews()
-
-        val browsers = BrowserUtils.installedBrowsers(this)
-        val saved = prefs.protectedPackages
-
-        if (browsers.isEmpty()) {
-            val tip = CheckBox(this).apply {
-                text = getString(R.string.browser_empty)
-                isEnabled = false
-            }
-            container.addView(tip)
-            updateBrowserListEnabled()
-            return
-        }
-
-        val current = mutableSetOf<String>()
-        // 用户还没手动勾选过时，默认全部保护
-        if (saved.isNotEmpty()) current.addAll(saved)
-
-        browsers.forEach { browser ->
-            val checkBox = CheckBox(this).apply {
-                text = browser.label
-                textSize = 15f
-                tag = browser.packageName
-                isChecked = if (saved.isEmpty()) true else saved.contains(browser.packageName)
-                setOnCheckedChangeListener { _, checked ->
-                    if (checked) current.add(browser.packageName)
-                    else current.remove(browser.packageName)
-                    prefs.protectedPackages = current.toSet()
-                }
-            }
-            container.addView(checkBox)
-        }
-        updateBrowserListEnabled()
-    }
-
-    private fun updateBrowserListEnabled() {
-        val enabled = !prefs.protectAllApps
-        binding.layoutBrowsers.alpha = if (enabled) 1f else 0.4f
-        for (i in 0 until binding.layoutBrowsers.childCount) {
-            binding.layoutBrowsers.getChildAt(i).isEnabled = enabled
-        }
-        binding.tvBrowserHint.text = if (enabled) {
-            getString(R.string.browser_hint, binding.layoutBrowsers.childCount)
+    private fun togglePause() {
+        if (prefs.isPaused()) {
+            prefs.resume()
         } else {
-            getString(R.string.browser_protect_all_hint)
+            prefs.pause(10)
         }
+        handler.removeCallbacks(pausedTicker)
+        if (prefs.isPaused()) handler.postDelayed(pausedTicker, 1000L)
+        refreshStatus()
     }
 
-    // -------------------------------------------------------------- 拦截记录
-
-    private fun setupLogList() {
-        binding.rvLogs.layoutManager = LinearLayoutManager(this)
-        binding.rvLogs.adapter = logAdapter
+    private fun formatRemaining(ms: Long): String {
+        val totalSeconds = (ms + 999) / 1000
+        val minutes = totalSeconds / 60
+        val seconds = totalSeconds % 60
+        return if (minutes > 0) "${minutes}分${seconds}秒" else "${seconds}秒"
     }
 
-    private fun refreshLogs() {
-        val records = BlockLogStore.all()
-        logAdapter.submit(records)
-        binding.tvCount.text = getString(R.string.count_value, BlockLogStore.total(this))
-        binding.tvEmpty.visibility =
-            if (records.isEmpty()) android.view.View.VISIBLE else android.view.View.GONE
+    private fun scopeLabel(): String = when (prefs.mode) {
+        ProtectMode.BROWSERS -> getString(R.string.scope_browsers_short)
+        ProtectMode.SELECTED -> getString(R.string.scope_selected_short, prefs.selectedApps.size)
+        ProtectMode.ALL -> getString(R.string.scope_all_short)
     }
 
-    // -------------------------------------------------------------- 服务状态
-
-    private fun refreshServiceStatus() {
-        val enabled = isAccessibilityServiceEnabled()
-        binding.tvServiceStatus.text = getString(
-            if (enabled) R.string.service_on else R.string.service_off
-        )
-        binding.tvServiceStatus.setTextColor(
-            getColor(if (enabled) R.color.status_on else R.color.status_off)
-        )
-        binding.btnAccessibility.text = getString(
-            if (enabled) R.string.open_accessibility_settings else R.string.enable_accessibility
-        )
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
+    /** 读系统设置判断本应用的无障碍服务是否已开启 */
+    fun isServiceEnabled(): Boolean {
         val expected = ComponentName(this, PopupAccessibilityService::class.java)
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
 
         val accessibilityOn = Settings.Secure.getInt(
             contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0
         ) == 1
         if (!accessibilityOn) return false
+
+        val enabledServices = Settings.Secure.getString(
+            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+        ) ?: return false
 
         val splitter = TextUtils.SimpleStringSplitter(':')
         splitter.setString(enabledServices)
@@ -211,9 +169,5 @@ class MainActivity : AppCompatActivity() {
             if (component != null && component == expected) return true
         }
         return false
-    }
-
-    private fun toast(message: CharSequence) {
-        android.widget.Toast.makeText(this, message, android.widget.Toast.LENGTH_SHORT).show()
     }
 }
