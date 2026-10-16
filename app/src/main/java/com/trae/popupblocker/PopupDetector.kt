@@ -26,15 +26,20 @@ class ScanResult(
 /**
  * 弹窗检测引擎。
  *
- * 这一版的核心原则是**宁可漏，不可误**：上一版用「广告文案打分」触发动作，
- * 而正常网页里「广告」「推广」「立即下载」这类字眼太常见，结果在用户正常浏览时
- * 频繁误触发返回键。现在：
+ * 核心原则是**宁可漏，不可误**，这里有三条设计约束：
  *
- *  - 广告文案不再参与判定，只保留“关闭类”文案；
- *  - 关闭文案分两档：明确无歧义的（关闭广告 / 跳过 / X）直接点；
- *    有歧义的（关闭 / ×）必须通过结构校验——它得处在一个“大容器”里，
- *    这样才不会点到浏览器工具栏和标签页上的关闭按钮；
- *  - 反例词黑名单进一步挡掉标签页、书签、菜单这类正经按钮。
+ * 1. **只在语义确实是「关闭这个浮层」时才动手。**
+ *    「不感兴趣」「以后再说」「残忍拒绝」这类词的意思是对内容表态，不是关闭浮层，
+ *    它们大量存在于商品卡片和推荐流里。替你点下去等于替你做了决定，
+ *    所以 [NEVER_CLICK_WORDS] 里的词一律不碰。
+ *
+ * 2. **歧义文案必须通过结构校验。**
+ *    「关闭广告 / 跳过 / X」语义无歧义，直接点；「关闭 / close」有歧义，
+ *    要求它处在一个铺满屏幕的大容器里，才不会点到浏览器工具栏和标签页上的小叉。
+ *
+ * 3. **列表里的按钮不点。**
+ *    推荐流、商品列表里的按钮都长在可滚动的列表容器内，广告浮层的关闭按钮不会。
+ *    这条专门拦截“列表项里的表态按钮”这一类误触。
  */
 class PopupDetector(
     private val screenWidth: Int,
@@ -63,8 +68,17 @@ class PopupDetector(
 
         /** 中置信度：常见但存在歧义，必须通过结构校验才点击 */
         private val MEDIUM_WORDS = listOf(
-            "关闭", "close", "dismiss", "我知道了", "以后再说", "稍后再说",
-            "下次再说", "不再提示", "不再提醒", "残忍拒绝", "不感兴趣"
+            "关闭", "close", "dismiss"
+        )
+
+        /**
+         * 永不点击：这些词的语义是「对内容表态」或「稍后再处理」，
+         * 不是「关闭这个浮层」。商品卡片、推荐流、评分弹窗里到处都是，
+         * 替用户点掉等于替他做决定。
+         */
+        private val NEVER_CLICK_WORDS = listOf(
+            "不感兴趣", "残忍拒绝", "以后再说", "稍后再说", "下次再说",
+            "不再提示", "不再提醒", "我知道了", "知道了", "暂不", "放弃", "拒绝"
         )
 
         /**
@@ -84,6 +98,7 @@ class PopupDetector(
         private val STRONG_NORM = STRONG_WORDS.map { normalize(it) }
         private val MEDIUM_NORM = MEDIUM_WORDS.map { normalize(it) }
         private val BLOCK_NORM = BLOCK_WORDS.map { normalize(it) }
+        private val NEVER_NORM = NEVER_CLICK_WORDS.map { normalize(it) }
 
         /** 去掉空白、零宽字符和变体选择符，让 “✖️” 和 “x” 都能归一化 */
         private fun normalize(label: String): String =
@@ -121,8 +136,11 @@ class PopupDetector(
                         hasCloseText = true
                         val target = resolveClickable(node)
                         if (target != null) {
-                            // 歧义文案必须处在大容器里，否则很可能是在点工具栏
-                            val acceptable = match.strong || inLargeContainer(node, root)
+                            // 歧义文案必须同时通过两道结构校验：
+                            //  1. 处在一个铺满屏幕的大容器里（排除工具栏）；
+                            //  2. 不在可滚动列表内（排除列表项里的表态按钮）。
+                            val acceptable = match.strong ||
+                                (inLargeContainer(node, root) && !inScrollableList(node, root))
                             if (acceptable) {
                                 val confidence = if (match.strong) 10 else 7
                                 val previous = best
@@ -134,14 +152,13 @@ class PopupDetector(
                                     )
                                 }
                             } else {
-                                signals += "「${match.word}」疑为工具栏按钮，已跳过"
+                                signals += "「${match.word}」未通过结构校验，已跳过"
                             }
                         } else {
                             signals += "「${match.word}」不可点击，跳过"
                         }
-                    } else if (isBlocked(label)) {
-                        // 命中反例词，明确记录一下，方便排查
-                        signals += "已忽略疑似标签页/工具栏的关闭按钮"
+                    } else {
+                        skipReason(label)?.let { signals += it }
                     }
                 }
 
@@ -193,7 +210,10 @@ class PopupDetector(
         // 纯 X 字形：整段只有这个符号才算，避免把 “x264 视频” 之类误判
         if (X_GLYPHS.contains(norm)) return Match(label.trim(), true)
 
-        // 先排除正经功能按钮
+        // 内容表态类按钮绝不点击（不感兴趣 / 以后再说 / 残忍拒绝 …）
+        if (NEVER_NORM.any { norm.contains(it) }) return null
+
+        // 再排除正经功能按钮（标签页 / 书签 / 菜单 …）
         if (BLOCK_NORM.any { norm.contains(it) }) return null
 
         STRONG_NORM.firstOrNull { norm.startsWith(it) }?.let { return Match(it, true) }
@@ -201,10 +221,34 @@ class PopupDetector(
         return null
     }
 
-    /** 只用于日志提示，判断这段文案是不是被反例词挡下来了 */
-    private fun isBlocked(label: String): Boolean {
+    /** 只用于日志：说明这段文案为什么没有动手，方便排查 */
+    private fun skipReason(label: String): String? {
         val norm = normalize(label)
-        return BLOCK_NORM.any { norm.contains(it) && norm.contains("关闭") }
+        NEVER_NORM.firstOrNull { norm.contains(it) }
+            ?.let { return "「$it」属于内容表态按钮，已忽略" }
+        if (BLOCK_NORM.any { norm.contains(it) } && norm.contains("关闭")) {
+            return "已忽略疑似标签页/工具栏的关闭按钮"
+        }
+        return null
+    }
+
+    /**
+     * 判断候选是否长在一个可滚动的列表容器里。
+     *
+     * 推荐流、商品列表、搜索结果里的按钮（尤其“不感兴趣”这类表态按钮）
+     * 都嵌在可滚动列表内；而广告浮层的关闭按钮是独立浮层，不在列表里。
+     */
+    private fun inScrollableList(node: AccessibilityNodeInfo, root: AccessibilityNodeInfo): Boolean {
+        var parent = node.parent
+        var hops = 0
+        while (parent != null && parent !== root && hops < 10) {
+            if (parent.isScrollable || parent.collectionInfo != null) return true
+            val className = parent.className?.toString().orEmpty()
+            if (className.contains("RecyclerView") || className.contains("ListView")) return true
+            parent = parent.parent
+            hops++
+        }
+        return false
     }
 
     /**
@@ -247,6 +291,7 @@ class PopupDetector(
         if (screenArea <= 0L || area * 100 > screenArea * 2) return false
 
         if (!inLargeContainer(node, root)) return false
+        if (inScrollableList(node, root)) return false
 
         val zoneX = screenWidth * 28 / 100
         val zoneY = screenHeight * 28 / 100

@@ -156,18 +156,32 @@ class PopupAccessibilityService : AccessibilityService() {
 
         // 首选：直接点掉关闭按钮
         val candidate = result.closeCandidate
+        var acted = false
         if (candidate != null && prefs.clickClose) {
-            if (click(candidate.node)) {
+            acted = click(candidate.node)
+            if (acted) {
                 record(pkg, candidate.reason)
                 return
             }
         }
 
         // 兜底：窗口里确实存在关闭文案，但一个可点击目标都没找到，才允许按返回
-        if (prefs.backFallback && candidate == null && result.hasCloseText) {
+        if (!acted && prefs.backFallback && candidate == null && result.hasCloseText) {
             if (performGlobalAction(GLOBAL_ACTION_BACK)) {
                 record(pkg, "窗口内有「关闭/跳过」文案但无可点击目标，执行返回键兜底")
+                return
             }
+        }
+
+        // 没有动作时，把“为什么没动手”记进诊断，供排查漏拦
+        val outcome = when {
+            candidate != null -> "找到关闭目标但点击未生效：${candidate.reason}"
+            result.signals.isNotEmpty() -> result.signals.first()
+            result.hasCloseText -> "有关闭文案但无可点击目标"
+            else -> null
+        }
+        if (outcome != null) {
+            ScanDiagStore.add(AppUtils.label(this, pkg), pkg, outcome)
         }
     }
 

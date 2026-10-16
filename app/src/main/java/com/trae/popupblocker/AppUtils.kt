@@ -26,6 +26,9 @@ object AppUtils {
     @Volatile
     private var browserCache: Set<String>? = null
 
+    /** 应用名会被服务反复查询，缓存下来避免每次都走 PackageManager */
+    private val labelCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     /** 所有能打开网页的应用的包名 */
     fun browsers(context: Context): Set<String> {
         browserCache?.let { return it }
@@ -56,8 +59,10 @@ object AppUtils {
         return result
     }
 
-    fun label(context: Context, packageName: String): String =
-        runCatching {
+    fun label(context: Context, packageName: String): String {
+        labelCache[packageName]?.let { return it }
+
+        val resolved = runCatching {
             val pm = context.packageManager
             val info = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
                 pm.getApplicationInfo(packageName, PackageManager.ApplicationInfoFlags.of(0L))
@@ -67,6 +72,10 @@ object AppUtils {
             }
             pm.getApplicationLabel(info).toString()
         }.getOrDefault(packageName)
+
+        labelCache[packageName] = resolved
+        return resolved
+    }
 
     fun icon(context: Context, packageName: String): Drawable? =
         runCatching { context.packageManager.getApplicationIcon(packageName) }.getOrNull()

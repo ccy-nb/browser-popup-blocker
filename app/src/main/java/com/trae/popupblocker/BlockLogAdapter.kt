@@ -39,6 +39,6 @@ class BlockLogAdapter : RecyclerView.Adapter<BlockLogAdapter.ViewHolder>() {
     override fun getItemCount(): Int = items.size
 
     companion object {
-        private val TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
+        val TIME_FORMAT = SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault())
     }
 }

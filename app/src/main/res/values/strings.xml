@@ -67,6 +67,9 @@
     <string name="count_value">累计拦截 %1$d 次</string>
     <string name="clear_logs">清空记录</string>
     <string name="empty_logs">还没有记录。去浏览器或你勾选的应用里逛一逛，被处理掉的弹窗会显示在这里，并附上判定依据。</string>
+    <string name="section_diag">最近扫描</string>
+    <string name="diag_hint">引擎的判断过程，含被忽略的原因。排查“该拦没拦”或“不该拦却拦了”时看这里。</string>
+    <string name="diag_empty">还没有扫描结论。有可识别的线索时才会记录。</string>
 
     <!-- 无障碍服务描述 -->
     <string name="accessibility_label">弹窗拦截</string>
